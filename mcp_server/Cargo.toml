@@ -11,6 +11,8 @@ serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 jsonrpc-http-server = "18.0.0"
 clap = { version = "4.4.8", features = ["derive"] }
+env_logger = "0.10.0" # Added env_logger
+log = "0.4.20" # Added log
 
 [dev-dependencies]
 tempfile = "3"
