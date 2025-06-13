@@ -5,8 +5,39 @@ use std::path::Path;
 use std::sync::Arc;
 
 use clap::Parser;
+use env_logger; // Added env_logger
 use jsonrpc_http_server::jsonrpc_core::{Error, ErrorCode, IoHandler, Params, Value};
 use jsonrpc_http_server::{DomainsValidation, ServerBuilder};
+use log; // Added log
+use serde::{Deserialize, Serialize}; // Added for InitializeParams/Result
+
+// Structs for the 'initialize' RPC method
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ClientInfo {
+    name: String,
+    version: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct InitializeParams {
+    protocol_version: Option<String>,
+    capabilities: serde_json::Value,
+    client_info: Option<ClientInfo>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct ServerCapabilities {
+    // Define actual server capabilities here later if needed
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct InitializeResult {
+    capabilities: ServerCapabilities,
+}
 
 #[derive(Debug)]
 pub struct WordIndex {
@@ -16,6 +47,7 @@ pub struct WordIndex {
 
 impl WordIndex {
     pub fn new(filename: &str) -> Result<Self, std::io::Error> {
+        log::debug!("WordIndex::new called with filename: {}", filename);
         let path = Path::new(filename);
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -45,6 +77,7 @@ impl WordIndex {
     }
 
     pub fn search(&self, query: &str) -> Vec<usize> {
+        log::debug!("WordIndex::search called with query: '{}'", query);
         let query_words: Vec<String> = query
             .split_whitespace()
             .map(|word| {
@@ -56,22 +89,30 @@ impl WordIndex {
             .filter(|word| !word.is_empty())
             .collect();
 
+        log::trace!("Parsed query_words: {:?}", query_words);
+
         if query_words.is_empty() {
+            log::debug!("Empty query_words, returning empty results.");
             return Vec::new();
         }
 
         let mut result_line_nums: Option<HashSet<usize>> = None;
 
         for word in query_words {
+            log::trace!("Processing word: '{}'", word);
             if let Some(line_nums_for_word) = self.index.get(&word) {
+                log::trace!("Found line numbers for '{}': {:?}", word, line_nums_for_word);
                 let current_word_set: HashSet<usize> =
                     line_nums_for_word.iter().cloned().collect();
                 if let Some(ref mut existing_set) = result_line_nums {
                     existing_set.retain(|line_num| current_word_set.contains(line_num));
+                    log::trace!("Retained line numbers: {:?}", existing_set);
                 } else {
                     result_line_nums = Some(current_word_set);
+                    log::trace!("Initialized result_line_nums with: {:?}", result_line_nums);
                 }
             } else {
+                log::debug!("Word '{}' not found in index, returning empty results.", word);
                 return Vec::new();
             }
         }
@@ -79,16 +120,22 @@ impl WordIndex {
         if let Some(final_set) = result_line_nums {
             let mut sorted_results: Vec<usize> = final_set.into_iter().collect();
             sorted_results.sort_unstable();
+            log::debug!("Search successful, returning results: {:?}", sorted_results);
             sorted_results
         } else {
+            log::debug!("No results found after processing all words.");
             Vec::new()
         }
     }
 
     pub fn fetch(&self, line_number: usize) -> Option<String> {
+        log::debug!("WordIndex::fetch called with line_number: {}", line_number);
         if line_number < self.lines.len() {
-            Some(self.lines[line_number].clone())
+            let line = self.lines[line_number].clone();
+            log::trace!("Fetched line for number {}: '{}'", line_number, line);
+            Some(line)
         } else {
+            log::debug!("Line number {} out of bounds (lines.len() is {}).", line_number, self.lines.len());
             None
         }
     }
@@ -99,26 +146,38 @@ impl WordIndex {
 struct Cli {
     #[clap(short, long, value_delimiter = ',', help = "IP:PORT addresses to listen on (comma-separated)")]
     addresses: Vec<String>,
+    #[clap(short, long, action = clap::ArgAction::Count, help = "Enable verbose logging. Use -vv for more verbose output.")]
+    verbose: u8,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
+    // Initialize logger based on verbose level
+    match cli.verbose {
+        0 => std::env::set_var("RUST_LOG", "info"),
+        1 => std::env::set_var("RUST_LOG", "debug"),
+        _ => std::env::set_var("RUST_LOG", "trace"),
+    }
+    env_logger::init();
+
+    log::info!("Verbose level: {}", cli.verbose); // Replaced println with log::info
+
     if cli.addresses.is_empty() {
-        eprintln!("Error: No addresses provided. Please specify at least one address using --addresses ip:port.");
+        log::error!("Error: No addresses provided. Please specify at least one address using --addresses ip:port."); // Replaced eprintln with log::error
         std::process::exit(1);
     }
 
-    println!("Loading database from db.txt...");
+    log::info!("Loading database from db.txt..."); // Replaced println with log::info
     let word_index = match WordIndex::new("db.txt") {
         Ok(wi) => Arc::new(wi),
         Err(e) => {
-            eprintln!("Failed to load db.txt: {}", e);
+            log::error!("Failed to load db.txt: {}", e); // Replaced eprintln with log::error
             std::process::exit(1);
         }
     };
-    println!("Database loaded successfully.");
+    log::info!("Database loaded successfully."); // Replaced println with log::info
 
     let mut handler = IoHandler::new();
 
@@ -127,18 +186,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handler.add_method("search", move |params: Params| {
         let wi = Arc::clone(&wi_search);
         async move {
+            log::debug!("RPC 'search' method called with params: {:?}", params);
             match params.parse::<(String,)>() {
                 Ok((query,)) => {
+                    log::trace!("Parsed query for 'search': '{}'", query);
                     let results = wi.search(&query);
+                    log::trace!("Results for 'search' query '{}': {:?}", query, results);
                     Ok(Value::Array(
                         results.into_iter().map(|n| Value::Number(n.into())).collect(),
                     ))
                 }
-                Err(_) => Err(Error {
+                Err(e) => {
+                    log::error!("Failed to parse params for 'search': {:?}", e);
+                    Err(Error {
+                        code: ErrorCode::InvalidParams,
+                        message: "Invalid parameters: Expected a single string query.".into(),
+                        data: None,
+                    })
+                }
+            }
+        }
+    });
+
+    // RPC "initialize" method
+    handler.add_method("initialize", |params: Params| async move {
+        log::debug!("RPC method 'initialize' called with params: {:?}", params);
+        match params.parse::<InitializeParams>() {
+            Ok(parsed_params) => {
+                log::info!("Successfully parsed initialize parameters: {:?}", parsed_params);
+                if let Some(client_info) = &parsed_params.client_info {
+                    log::info!(
+                        "Client name: {}, version: {:?}",
+                        client_info.name,
+                        client_info.version.as_deref().unwrap_or("N/A")
+                    );
+                }
+
+                let result = InitializeResult {
+                    capabilities: ServerCapabilities {},
+                };
+                match serde_json::to_value(result) {
+                    Ok(val) => Ok(val),
+                    Err(e) => {
+                        log::error!("Failed to serialize InitializeResult: {}", e);
+                        Err(Error::internal_error())
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to parse initialize parameters: {}", e);
+                Err(Error {
                     code: ErrorCode::InvalidParams,
-                    message: "Invalid parameters: Expected a single string query.".into(),
+                    message: format!("Invalid parameters for initialize: {}", e),
                     data: None,
-                }),
+                })
             }
         }
     });
@@ -148,21 +249,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handler.add_method("fetch", move |params: Params| {
         let wi = Arc::clone(&wi_fetch);
         async move {
+            log::debug!("RPC 'fetch' method called with params: {:?}", params);
             match params.parse::<(usize,)>() {
-                Ok((line_number,)) => match wi.fetch(line_number) {
-                    Some(line) => Ok(Value::String(line)),
-                    None => Err(Error {
-                        code: ErrorCode::ServerError(-32001), // Custom error code
-                        message: "Invalid record ID: Line number out of bounds.".into(),
+                Ok((line_number,)) => {
+                    log::trace!("Parsed line_number for 'fetch': {}", line_number);
+                    match wi.fetch(line_number) {
+                        Some(line) => {
+                            log::trace!("Fetched line for 'fetch' line_number {}: '{}'", line_number, line);
+                            Ok(Value::String(line))
+                        }
+                        None => {
+                            log::warn!("Invalid record ID for 'fetch' line_number {}: Line number out of bounds.", line_number);
+                            Err(Error {
+                                code: ErrorCode::ServerError(-32001), // Custom error code
+                                message: "Invalid record ID: Line number out of bounds.".into(),
+                                data: None,
+                            })
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to parse params for 'fetch': {:?}", e);
+                    Err(Error {
+                        code: ErrorCode::InvalidParams,
+                        message: "Invalid parameters: Expected a single unsigned integer line number."
+                            .into(),
                         data: None,
-                    }),
-                },
-                Err(_) => Err(Error {
-                    code: ErrorCode::InvalidParams,
-                    message: "Invalid parameters: Expected a single unsigned integer line number."
-                        .into(),
-                    data: None,
-                }),
+                    })
+                }
             }
         }
     });
@@ -170,7 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut server_handles = Vec::new();
 
     for addr_str in cli.addresses {
-        println!("Attempting to start server on {}...", addr_str);
+        log::info!("Attempting to start server on {}...", addr_str); // Replaced println with log::info
         match addr_str.parse::<std::net::SocketAddr>() {
             Ok(socket_addr) => {
                 let server = ServerBuilder::new(handler.clone()) // Clone handler for each server
@@ -179,28 +293,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 match server {
                     Ok(s) => {
-                        println!("Server listening on http://{}", socket_addr);
+                        log::info!("Server listening on http://{}", socket_addr); // Replaced println with log::info
                         server_handles.push(s); // Store the server handle (optional for just waiting)
                     }
                     Err(e) => {
-                        eprintln!("Failed to start server on {}: {:?}", socket_addr, e);
+                        log::error!("Failed to start server on {}: {:?}", socket_addr, e); // Replaced eprintln with log::error
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Invalid address format '{}': {}", addr_str, e);
+                log::error!("Invalid address format '{}': {}", addr_str, e); // Replaced eprintln with log::error
             }
         }
     }
 
     if server_handles.is_empty() {
-        eprintln!("No servers were started successfully.");
+        log::error!("No servers were started successfully."); // Replaced eprintln with log::error
         return Ok(());
     }
 
-    println!("Servers started. Press Ctrl+C to shut down.");
+    log::info!("Servers started. Press Ctrl+C to shut down."); // Replaced println with log::info
     tokio::signal::ctrl_c().await?;
-    println!("Ctrl+C received, shutting down servers.");
+    log::info!("Ctrl+C received, shutting down servers."); // Replaced println with log::info
 
     // Optional: explicitly close servers if needed, though dropping handles might be enough
     // for handle in server_handles {
@@ -390,5 +504,121 @@ mod tests {
         // test_db.txt line 7 is empty
         let line = wi.fetch(7);
         assert_eq!(line, Some("".to_string()));
+    }
+
+    #[test]
+    fn test_rpc_initialize_method_success() {
+        let mut handler = IoHandler::new();
+
+        // Register the initialize method (copied and adapted from main.rs)
+        handler.add_method("initialize", |params: Params| async move {
+            // Using println! for logs in test if logger is not setup for test environment
+            // println!("RPC method 'initialize' called with params: {:?}", params);
+            match params.parse::<InitializeParams>() {
+                Ok(parsed_params) => {
+                    // println!("Successfully parsed initialize parameters: {:?}", parsed_params);
+                    if let Some(client_info) = &parsed_params.client_info {
+                        // println!(
+                        //     "Client name: {}, version: {:?}",
+                        //     client_info.name,
+                        //     client_info.version.as_deref().unwrap_or("N/A")
+                        // );
+                    }
+                    let result = InitializeResult {
+                        capabilities: ServerCapabilities {},
+                    };
+                    match serde_json::to_value(result) {
+                        Ok(val) => Ok(val),
+                        Err(_e) => Err(Error::internal_error()), // Simplified error for test
+                    }
+                }
+                Err(e) => Err(Error {
+                    code: ErrorCode::InvalidParams,
+                    message: format!("Invalid parameters for initialize: {}", e),
+                    data: None,
+                }),
+            }
+        });
+
+        let request_json = r#"{
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "1.0",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "test-vscode-client",
+                    "version": "0.0.1"
+                }
+            },
+            "id": 123
+        }"#;
+
+        let response_str_opt = handler.handle_request_sync(request_json);
+        assert!(response_str_opt.is_some(), "Handler should produce a response");
+
+        let response_str = response_str_opt.unwrap();
+        // println!("Response: {}", response_str); // For debugging the test
+
+        let response_json: serde_json::Value = serde_json::from_str(&response_str)
+            .expect("Response should be valid JSON");
+
+        assert_eq!(response_json["jsonrpc"], "2.0");
+        assert_eq!(response_json["id"], 123);
+        assert!(response_json["error"].is_null(), "Response should not have an error part. Error: {}", response_json["error"]);
+
+        let result = response_json.get("result").expect("Response should have a result part");
+        assert!(result.is_object(), "Result should be an object");
+
+        let capabilities = result.get("capabilities").expect("Result should have capabilities");
+        assert!(capabilities.is_object(), "Capabilities should be an object");
+        assert_eq!(capabilities.as_object().unwrap().len(), 0, "Capabilities object should be empty");
+    }
+
+    #[test]
+    fn test_rpc_initialize_method_invalid_params() {
+        let mut handler = IoHandler::new();
+        // Register initialize method (same as above)
+        handler.add_method("initialize", |params: Params| async move {
+            match params.parse::<InitializeParams>() {
+                Ok(_parsed_params) => {
+                    let result = InitializeResult {
+                        capabilities: ServerCapabilities {},
+                    };
+                    match serde_json::to_value(result) {
+                        Ok(val) => Ok(val),
+                        Err(_e) => Err(Error::internal_error()),
+                    }
+                }
+                Err(e) => Err(Error {
+                    code: ErrorCode::InvalidParams,
+                    message: format!("Invalid parameters for initialize: {}", e),
+                    data: None,
+                }),
+            }
+        });
+
+        // Sending params as an array, which is invalid for InitializeParams struct
+        let request_json_invalid = r#"{
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": ["param1", "param2"],
+            "id": 456
+        }"#;
+
+        let response_str_opt = handler.handle_request_sync(request_json_invalid);
+        assert!(response_str_opt.is_some(), "Handler should produce a response for invalid params");
+
+        let response_str = response_str_opt.unwrap();
+        let response_json: serde_json::Value = serde_json::from_str(&response_str)
+            .expect("Response should be valid JSON");
+
+        assert_eq!(response_json["jsonrpc"], "2.0");
+        assert_eq!(response_json["id"], 456);
+        assert!(response_json["result"].is_null(), "Response should not have a result part for an error");
+
+        let error = response_json.get("error").expect("Response should have an error part");
+        assert_eq!(error["code"], ErrorCode::InvalidParams.code());
+        assert!(error["message"].as_str().unwrap().contains("Invalid parameters"));
     }
 }
