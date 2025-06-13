@@ -1,0 +1,4 @@
+This is the first line of the dummy database.
+Here is another line with some more text.
+A third line to make sure there are a few entries.
+Final line of the initial db.txt.
