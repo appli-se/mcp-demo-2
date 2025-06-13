@@ -1,0 +1,10 @@
+Hello world!
+This is a test line.
+Another line for testing search functionality.
+UPPERCASE and lowercase words.
+Words with punctuation: comma, period.
+123 numbers 456.
+An empty line follows this one.
+
+A line after an empty line.
+repeated repeated words.
