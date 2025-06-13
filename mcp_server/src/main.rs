@@ -29,8 +29,28 @@ struct InitializeParams {
 
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
+struct ToolCapabilities {
+    list_changed: bool,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SearchCapabilities {
+    enabled: bool,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct FetchCapabilities {
+    enabled: bool,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
 struct ServerCapabilities {
-    // Define actual server capabilities here later if needed
+    tools: ToolCapabilities,
+    search: SearchCapabilities,
+    fetch: FetchCapabilities,
 }
 
 #[derive(Serialize, Debug)]
@@ -223,7 +243,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 let result = InitializeResult {
-                    capabilities: ServerCapabilities {},
+                    capabilities: ServerCapabilities {
+                        tools: ToolCapabilities { list_changed: true },
+                        search: SearchCapabilities { enabled: true },
+                        fetch: FetchCapabilities { enabled: true },
+                    },
                 };
                 match serde_json::to_value(result) {
                     Ok(val) => Ok(val),
@@ -525,7 +549,11 @@ mod tests {
                         // );
                     }
                     let result = InitializeResult {
-                        capabilities: ServerCapabilities {},
+                        capabilities: ServerCapabilities {
+                            tools: ToolCapabilities { list_changed: true },
+                            search: SearchCapabilities { enabled: true },
+                            fetch: FetchCapabilities { enabled: true },
+                        },
                     };
                     match serde_json::to_value(result) {
                         Ok(val) => Ok(val),
@@ -572,7 +600,16 @@ mod tests {
 
         let capabilities = result.get("capabilities").expect("Result should have capabilities");
         assert!(capabilities.is_object(), "Capabilities should be an object");
-        assert_eq!(capabilities.as_object().unwrap().len(), 0, "Capabilities object should be empty");
+
+        // Check for new capabilities
+        let tools_cap = capabilities.get("tools").expect("Capabilities should have tools");
+        assert_eq!(tools_cap.get("listChanged").expect("Tools should have listChanged").as_bool().unwrap(), true);
+
+        let search_cap = capabilities.get("search").expect("Capabilities should have search");
+        assert_eq!(search_cap.get("enabled").expect("Search should have enabled").as_bool().unwrap(), true);
+
+        let fetch_cap = capabilities.get("fetch").expect("Capabilities should have fetch");
+        assert_eq!(fetch_cap.get("enabled").expect("Fetch should have enabled").as_bool().unwrap(), true);
     }
 
     #[test]
@@ -583,7 +620,11 @@ mod tests {
             match params.parse::<InitializeParams>() {
                 Ok(_parsed_params) => {
                     let result = InitializeResult {
-                        capabilities: ServerCapabilities {},
+                        capabilities: ServerCapabilities {
+                            tools: ToolCapabilities { list_changed: false },
+                            search: SearchCapabilities { enabled: true },
+                            fetch: FetchCapabilities { enabled: true },
+                        },
                     };
                     match serde_json::to_value(result) {
                         Ok(val) => Ok(val),
